@@ -1,0 +1,3 @@
+Para mostrar un QR en la ventana "Donar": copia aquí tu imagen como
+donate-qr.png (o .jpg/.svg/.webp). Si no hay archivo, no se muestra nada.
+Puedes bajar el QR de tu cuenta desde paypal.me o desde tu botón de donación.

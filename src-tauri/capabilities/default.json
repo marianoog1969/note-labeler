@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schema/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permisos de la ventana principal",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://www.paypal.com/*" }, { "url": "https://paypal.me/*" }, { "url": "https://www.paypal.me/*" }]
+    }
+  ]
+}
