@@ -49,14 +49,31 @@ pre code{background:none;border:0;color:inherit;padding:0}
 footer{margin-top:60px;color:var(--muted);font-size:13px}
 @media (max-width:860px){nav{display:none}main{padding:24px 18px 60px}}
 @media print{nav{display:none}body{background:#fff}main{padding:0}h2{break-after:avoid}figure,table,.box{break-inside:avoid}img{box-shadow:none}}
+
+.search{position:relative;margin:0 0 16px}
+.search input{width:100%;padding:9px 30px 9px 12px;border:1px solid var(--line);border-radius:9px;font:inherit;font-size:14.5px;background:#fff;color:var(--text)}
+.search input:focus{outline:2px solid var(--accent);outline-offset:0}
+.search button{position:absolute;right:4px;top:4px;border:0;background:none;font-size:18px;color:var(--muted);cursor:pointer;display:none}
+.search.has button{display:block}
+.sinfo{font-size:12.5px;color:var(--muted);margin:6px 2px 0;min-height:16px}
+.snav{display:none;gap:6px;margin-top:6px}.snav.on{display:flex}
+.snav button{flex:1;border:1px solid var(--line);background:#fff;border-radius:7px;padding:3px;cursor:pointer;font:inherit;font-size:13px}
+.snav button:hover{background:var(--soft)}
+mark.hit{background:#ffe27a;color:inherit;border-radius:3px;padding:0 1px}
+mark.hit.cur{background:#ff9f43;outline:2px solid #ff9f43}
+section.hide,nav li.dim{display:none}
+@media print{.search,.snav{display:none}}
 </style>
 </head>
 <body>
 <div class="layout">
 <nav aria-label="Índice">
   <div class="logo">♪ Note Labeler</div>
-  <div class="ver">Manual de usuario · v0.1</div>
-  <ol>
+  <div class="ver">Manual de usuario · v1.2.1</div>
+  <div class="search"><input id="q" type="search" placeholder="Buscar en el manual…  ( / )" aria-label="Buscar en el manual" autocomplete="off"><button id="qx" title="Borrar (Esc)" aria-label="Borrar búsqueda">×</button></div>
+  <div class="sinfo" id="qi"></div>
+  <div class="snav" id="qn"><button id="qp">▲ Anterior</button><button id="qnx">Siguiente ▼</button></div>
+  <ol style="margin-top:12px">
     <li><a href="#que-es">Qué es</a></li>
     <li><a href="#primeros-pasos">Primeros pasos</a></li>
     <li><a href="#pantalla">La pantalla</a></li>
@@ -69,6 +86,8 @@ footer{margin-top:60px;color:var(--muted);font-size:13px}
     <li><a href="#limites">Límites</a></li>
     <li><a href="#problemas">Problemas frecuentes</a></li>
     <li><a href="#donar">Apoyar el proyecto</a></li>
+    <li><a href="#sonido">Escuchar y exportar</a></li>
+    <li><a href="#version">Aviso de nueva versión</a></li>
   </ol>
 </nav>
 <main>
@@ -161,6 +180,8 @@ footer{margin-top:60px;color:var(--muted);font-size:13px}
 <tr><td><strong>♯</strong></td><td><kbd>S</kbd></td><td>Sostenido.</td></tr>
 </table>
 <p>Una alteración marcada se <strong>arrastra hasta la siguiente barra de compás</strong> a las notas de la misma altura, igual que en una partitura. Así solo hace falta marcar la primera.</p>
+<h3>Cambiar la altura de una nota</h3>
+<p>Si el programa colocó una nota en una línea o espacio equivocado, selecciónala y usa los botones <strong>▲ ▼</strong> de <em>Altura</em> en el panel derecho, o <kbd>Mayús</kbd>+<kbd>↑</kbd> / <kbd>Mayús</kbd>+<kbd>↓</kbd>. Cada pulsación sube o baja un grado y el nombre se actualiza solo.</p>
 <h3>Añadir o eliminar notas</h3>
 <ul>
 <li><strong>Añadir:</strong> pulsa <kbd>+</kbd> (o el botón +), haz clic en la altura del pentagrama donde está la nota y vuelve a <kbd>V</kbd> (seleccionar). Útil para notas sin plica (redondas) que no se detectan solas.</li>
@@ -199,6 +220,7 @@ footer{margin-top:60px;color:var(--muted);font-size:13px}
 <table>
 <tr><th>Teclas</th><th>Acción</th></tr>
 <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Nota anterior / siguiente</td></tr>
+<tr><td><kbd>Espacio</kbd></td><td>Reproducir / parar</td></tr>
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Alteración anterior / siguiente</td></tr>
 <tr><td><kbd>Mayús</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>Subir / bajar la altura de la nota seleccionada</td></tr>
 <tr><td><kbd>B</kbd> <kbd>N</kbd> <kbd>S</kbd></td><td>Bemol, becuadro, sostenido</td></tr>
@@ -262,8 +284,91 @@ footer{margin-top:60px;color:var(--muted);font-size:13px}
 <p>Note Labeler es gratuito. Si te resulta útil, el botón <b>Donar</b> de la parte superior abre una ventana con un enlace de donación voluntaria por PayPal para el creador. No es obligatorio y el programa funciona igual sin donar.</p>
 </section>
 
-<footer>Note Labeler · Manual de usuario · versión 0.1</footer>
+<section id="sonido">
+<h2>13. Escuchar y exportar</h2>
+<p>El botón <strong>▶</strong> de la barra flotante (o <kbd>Espacio</kbd>) reproduce las notas de la página <strong>desde la nota seleccionada</strong>, o desde el principio si no hay ninguna. Mientras suena, la nota que se toca se va seleccionando. Vuelve a pulsarlo para parar.</p>
+<p>En el panel de ajustes, sección <strong>Sonido</strong>, eliges el instrumento (<em>Piano, Saxo, Clarinete, Gaita gallega</em>), el compás (para el MIDI) y el tempo en negras por minuto.</p>
+<h3>Duración de las notas</h3>
+<p>El programa lee la duración de cada nota: cabeza hueca o rellena, plica, barras o corchetes y puntillos. Si una nota está mal, selecciónala y cámbiala en <strong>Duración</strong> (redonda, blanca, negra, corchea, semicorchea) y con el botón <strong>Puntillo</strong>.</p>
+<h3>Silencios, ligaduras y tresillos</h3>
+<ul>
+<li><strong>Silencios:</strong> se detectan y se marcan con un recuadro verde. Cuentan en el tiempo al reproducir y exportar.</li>
+<li><strong>Ligaduras:</strong> si dos notas de la misma altura están unidas por un arco, la segunda no se vuelve a tocar y alarga a la primera. Puedes activarlo o quitarlo con el botón <strong>Ligada</strong> de la nota.</li>
+<li><strong>Tresillos:</strong> se reconocen por la cifra «3» sobre o bajo el grupo: sus tres notas duran dos tercios. Se corrigen con el botón <strong>Tresillo</strong>.</li>
+</ul>
+<h3>Exportar MIDI y MusicXML</h3>
+<p>El botón <strong>MIDI</strong> guarda un archivo <code>.mid</code> con el instrumento, el tempo y el compás elegidos (si el compás está en <em>Auto</em>, se deduce de la partitura).</p>
+<p>El botón <strong>MusicXML</strong> guarda un archivo <code>.musicxml</code> que abren MuseScore, Finale, Sibelius y otros programas, con compases, silencios, ligaduras, tresillos, armadura y clave.</p>
+<div class="warn box"><b>Límites</b>La lectura del ritmo no es perfecta: en las partituras de prueba, alrededor del 80 % de los compases suman exactamente. Fallan sobre todo las barras complejas con semicorcheas mezcladas con corcheas. No se detectan silencios dentro de un tresillo con corchete, ni dobles puntillos, ni cambios de compás. Se reproduce un pentagrama detrás de otro, de izquierda a derecha, y los acordes suenan a la vez. No se transpone para el saxo. Conviene revisar y corregir las duraciones dudosas.</div>
+<p>Sonidos: FluidR3_GM (licencia CC BY 3.0).</p>
+</section>
+
+<section id="version">
+<h2>14. Aviso de nueva versión</h2>
+<p>Al arrancar, el programa consulta en GitHub si hay una versión más reciente. Si la hay, aparece un aviso arriba con el botón <strong>Descargar</strong>, que abre la página de la versión. Si no hay conexión a internet no pasa nada y no se muestra ningún aviso.</p>
+</section>
+
+<footer>Note Labeler · Manual de usuario · versión 1.2.1</footer>
 </main>
 </div>
+<script>
+(function(){
+  var q=document.getElementById('q'),qx=document.getElementById('qx'),qi=document.getElementById('qi'),qn=document.getElementById('qn');
+  var box=q.parentNode,main=document.querySelector('main'),secs=[].slice.call(main.querySelectorAll('section')),
+      links=[].slice.call(document.querySelectorAll('nav li')),hits=[],cur=-1,t;
+  function norm(x){return x.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+  function clear(){
+    [].slice.call(main.querySelectorAll('mark.hit')).forEach(function(m){var p=m.parentNode;p.replaceChild(document.createTextNode(m.textContent),m);p.normalize();});
+    secs.forEach(function(s){s.classList.remove('hide');});links.forEach(function(l){l.classList.remove('dim');});
+    hits=[];cur=-1;qi.textContent='';qn.classList.remove('on');
+  }
+  function mark(node,term){
+    var w=document.createTreeWalker(node,NodeFilter.SHOW_TEXT,{acceptNode:function(n){
+      var p=n.parentNode.nodeName;return (p==='SCRIPT'||p==='STYLE')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}}),list=[],n;
+    while((n=w.nextNode()))list.push(n);
+    list.forEach(function(n){
+      var txt=n.nodeValue,nt=norm(txt);if(nt.length!==txt.length)return;
+      var i=nt.indexOf(term);if(i<0)return;
+      var frag=document.createDocumentFragment(),last=0;
+      while(i>=0){
+        frag.appendChild(document.createTextNode(txt.slice(last,i)));
+        var m=document.createElement('mark');m.className='hit';m.textContent=txt.slice(i,i+term.length);frag.appendChild(m);
+        last=i+term.length;i=nt.indexOf(term,last);
+      }
+      frag.appendChild(document.createTextNode(txt.slice(last)));n.parentNode.replaceChild(frag,n);
+    });
+  }
+  function go(d){
+    if(!hits.length)return;
+    if(cur>=0)hits[cur].classList.remove('cur');
+    cur=(cur+d+hits.length)%hits.length;hits[cur].classList.add('cur');
+    hits[cur].scrollIntoView({block:'center',behavior:'smooth'});
+    qi.textContent=(cur+1)+' de '+hits.length+' resultados';
+  }
+  function run(){
+    clear();var raw=q.value.trim();box.classList.toggle('has',!!q.value);
+    if(raw.length<2)return;
+    var term=norm(raw);
+    secs.forEach(function(s,i){
+      if(norm(s.textContent).indexOf(term)<0){s.classList.add('hide');if(links[i])links[i].classList.add('dim');}
+      else mark(s,term);
+    });
+    hits=[].slice.call(main.querySelectorAll('mark.hit'));
+    if(!hits.length){qi.textContent='Sin resultados';return;}
+    qn.classList.add('on');go(1);
+  }
+  q.addEventListener('input',function(){clearTimeout(t);t=setTimeout(run,150);});
+  q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();go(e.shiftKey?-1:1);}});
+  qx.addEventListener('click',function(){q.value='';run();q.focus();});
+  document.getElementById('qp').addEventListener('click',function(){go(-1);});
+  document.getElementById('qnx').addEventListener('click',function(){go(1);});
+  document.addEventListener('keydown',function(e){
+    var tag=(e.target.tagName||'');
+    if(e.key==='/'&&tag!=='INPUT'){e.preventDefault();q.focus();q.select();}
+    else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();q.focus();q.select();}
+    else if(e.key==='Escape'&&document.activeElement===q){q.value='';run();q.blur();}
+  });
+})();
+</script>
 </body>
 </html>

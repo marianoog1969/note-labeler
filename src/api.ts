@@ -10,6 +10,14 @@ export const pickPdf = async (): Promise<string | null> => {
 export const pickSavePath = (defaultPath: string): Promise<string | null> =>
   save({ defaultPath, filters: [{ name: "PDF", extensions: ["pdf"] }] });
 
+export const pickMidiPath = (defaultPath: string): Promise<string | null> =>
+  save({ defaultPath, filters: [{ name: "MIDI", extensions: ["mid"] }] });
+
+export const pickXmlPath = (defaultPath: string): Promise<string | null> =>
+  save({ defaultPath, filters: [{ name: "MusicXML", extensions: ["musicxml", "xml"] }] });
+
+export const writeFileB64 = (path: string, dataB64: string) => invoke<void>("write_file_b64", { path, dataB64 });
+
 export const readFileB64 = (path: string) => invoke<string>("read_file_b64", { path });
 
 export const analyzePage = (pngB64: string) => invoke<Analysis>("analyze_page", { pngB64 });

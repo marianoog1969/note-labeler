@@ -29,6 +29,11 @@ export interface Resolved {
   /** alteración efectiva ("b", "#", "n") o null si es natural sin signo */
   shown: "b" | "#" | "n" | null;
   text: string;
+  /** altura MIDI real (con armadura y alteraciones aplicadas) */
+  midi: number;
+  /** para MusicXML */
+  octave: number;
+  alter: number;
 }
 
 export interface Options {
@@ -86,7 +91,11 @@ export function resolveNames(notes: NoteState[], staves: Staff[], o: Options): R
     }
     // Si la alteración arrastrada coincide con la de la armadura y no se muestran las de armadura
     if (eff !== "auto" && eff === keyAcc[letter] && !o.showKey) shown = null;
-    out.push({ note: n, letter, shown, text: names[letter] });
+    const clefN = setup[n.staff]?.clef ?? "treble";
+    const dia = (clefN === "treble" ? 4 * 7 + 2 : 2 * 7 + 4) + n.step; // C0 = 0
+    const alter = eff === "auto" ? (keyAcc[letter] === "#" ? 1 : keyAcc[letter] === "b" ? -1 : 0) : eff === "#" ? 1 : eff === "b" ? -1 : 0;
+    const midi = 12 * (Math.floor(dia / 7) + 1) + [0, 2, 4, 5, 7, 9, 11][((dia % 7) + 7) % 7] + alter;
+    out.push({ note: n, letter, shown, text: names[letter], midi, octave: Math.floor(dia / 7), alter });
   }
   return out;
 }

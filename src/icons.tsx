@@ -10,6 +10,8 @@ const P: Record<string, string> = {
   zoomOut: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.3-4.3 M8 11h6",
   fit: "M4 9V5a1 1 0 0 1 1-1h4 M20 9V5a1 1 0 0 0-1-1h-4 M4 15v4a1 1 0 0 0 1 1h4 M20 15v4a1 1 0 0 1-1 1h-4",
   plus: "M12 5v14 M5 12h14",
+  play: "M7 4l13 8-13 8z",
+  stop: "M6 6h12v12H6z",
   cursor: "M5 3l14 7-6 2-2 6z",
   trash: "M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3",
   left: "M15 18l-6-6 6-6",

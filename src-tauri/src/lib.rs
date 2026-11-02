@@ -10,6 +10,13 @@ async fn read_file_b64(path: String) -> Result<String, String> {
     Ok(STANDARD.encode(bytes))
 }
 
+/// Guarda bytes (base64) en un fichero (para exportar MIDI).
+#[tauri::command]
+async fn write_file_b64(path: String, data_b64: String) -> Result<(), String> {
+    let bytes = STANDARD.decode(data_b64.as_bytes()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| format!("Could not write {path}: {e}"))
+}
+
 /// Recibe la página renderizada como PNG (base64) y detecta pentagramas y notas.
 #[tauri::command]
 async fn analyze_page(png_b64: String) -> Result<detect::Analysis, String> {
@@ -36,7 +43,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_file_b64, analyze_page, export_pdf])
+        .invoke_handler(tauri::generate_handler![read_file_b64, write_file_b64, analyze_page, export_pdf])
         .run(tauri::generate_context!())
         .expect("error al iniciar la aplicación");
 }

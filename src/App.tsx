@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { analyzePage, exportPdf, pickPdf, pickSavePath, readFileB64, type PageLabels } from "./api";
+import { analyzePage, exportPdf, pickMidiPath, pickXmlPath, pickPdf, pickSavePath, readFileB64, writeFileB64, type PageLabels } from "./api";
+import { DUR_KINDS, METERS, MIDI_PROGRAM, barSums, buildMidi, durOf, guessMeter, kindOf, restDur, withKind, type DurKind, type MeterId } from "./rhythm";
+import { buildMusicXml, type XmlPage } from "./musicxml";
+import type { Slot } from "./player";
 import { Icon } from "./icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { checkUpdate, RELEASES_URL } from "./update";
+import { Player, buildSlots } from "./player";
+import { DEFAULT_INSTRUMENT, INSTRUMENT_IDS, Instrument, isInstrument } from "./sampler";
 import { DONATE_URL, DONATE_CONFIGURED, DONATE_QR } from "./donate";
-import { ACC_SYMBOL, buildLabels, resolveNames, type Clef, type Notation } from "./names";
+import { ACC_SYMBOL, buildLabels, effectiveStaffSetup, resolveNames, type Clef, type Notation } from "./names";
 import { DPI, canvasToPngB64, loadPdf, renderPage, type PdfDoc } from "./pdf";
 import type { Acc, NoteState, PageData } from "./types";
 import { COLOR_NAMES, STR, defaultLang, type Lang } from "./i18n";
@@ -18,6 +24,7 @@ const COLORS = {
 type ColorKey = keyof typeof COLORS;
 
 const BASE_WIDTH = 900;
+const DUR_SYM: Record<string, string> = { whole: "𝅝", half: "𝅗𝅥", quarter: "♩", eighth: "♪", sixteenth: "𝅘𝅥𝅯" };
 const SETTINGS_KEY = "note-labeler.ajustes";
 const RECENT_KEY = "note-labeler.recientes";
 const HISTORY_MAX = 100;
@@ -30,13 +37,22 @@ interface Settings {
   showKey: boolean;
   scale: number;
   color: ColorKey;
+  instrument: Instrument;
+  tempo: number;
+  meter: MeterId | "auto";
 }
-const DEFAULTS: Settings = { key: "auto", clef: "auto", notation: defaultLang() === "en" ? "anglo" : "latin", lang: defaultLang(), showKey: true, scale: 1, color: "azul" };
+const DEFAULTS: Settings = { key: "auto", clef: "auto", notation: defaultLang() === "en" ? "anglo" : "latin", lang: defaultLang(), showKey: true, scale: 1, color: "azul", instrument: DEFAULT_INSTRUMENT, tempo: 100, meter: "auto" };
 
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+    if (raw) {
+      const c = { ...DEFAULTS, ...JSON.parse(raw) };
+      if (!isInstrument(c.instrument)) c.instrument = DEFAULT_INSTRUMENT;
+      if (!(c.tempo >= 40 && c.tempo <= 240)) c.tempo = DEFAULTS.tempo;
+      if (c.meter !== "auto" && !METERS.some((m) => m.id === c.meter)) c.meter = "auto";
+      return c;
+    }
   } catch { /* sin ajustes guardados */ }
   return DEFAULTS;
 }
@@ -65,6 +81,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [busyText, setBusyText] = useState("");
   const [toast, setToast] = useState<Toast>(null);
+  const [newVer, setNewVer] = useState<string | null>(null);
+  useEffect(() => { void checkUpdate(__APP_VERSION__).then(setNewVer); }, []);
   const [undoCount, setUndoCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -72,7 +90,7 @@ export default function App() {
   const [donate, setDonate] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
-  const { key, clef, notation, showKey, scale, color, lang } = cfg;
+  const { key, clef, notation, showKey, scale, color, lang, instrument, tempo, meter } = cfg;
   const L = STR[lang] ?? STR.en;
   const patchCfg = (p: Partial<Settings>) => setCfg((c) => ({ ...c, ...p }));
   const colorCss = COLORS[color]?.css ?? COLORS.azul.css;
@@ -257,6 +275,68 @@ export default function App() {
   const labels = useMemo(() => (data ? buildLabels(resolved, data.analysis.staves) : []), [data, resolved]);
   const sp = data?.analysis.staves[0]?.sp ?? 16.6;
 
+  // ---------------------------------------------------------------- reproducción
+  const player = useRef<Player | null>(null);
+  if (!player.current) player.current = new Player();
+  const [playing, setPlaying] = useState(false);
+  const [instLoading, setInstLoading] = useState(false);
+  const slots = useMemo(
+    () =>
+      buildSlots(
+        resolved.map((r) => ({ id: r.note.id, midi: r.midi, staff: r.note.staff, x: r.note.x, dur: durOf(r.note), tied: r.note.tied })),
+        (data?.analysis.rests ?? []).map((r) => ({ staff: r.staff, x: r.x, dur: restDur(r) })),
+        (si) => data?.analysis.staves[si]?.sp ?? 16
+      ),
+    [resolved, data]
+  );
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const tempoRef = useRef(tempo);
+  tempoRef.current = tempo;
+
+  useEffect(() => {
+    let cancel = false;
+    player.current!.instrument = instrument;
+    setInstLoading(true);
+    player.current!.setInstrument(instrument)
+      .catch(() => { if (!cancel) notify(L.instError, "error"); })
+      .finally(() => { if (!cancel) setInstLoading(false); });
+    return () => { cancel = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrument]);
+
+  const stopPlay = useCallback(() => {
+    player.current!.stop();
+    setPlaying(false);
+  }, []);
+
+  const startPlay = useCallback(() => {
+    const sl = slotsRef.current;
+    if (!sl.length) return;
+    let from = 0;
+    if (selected !== null) {
+      const i = sl.findIndex((s) => s.ids.includes(selected));
+      if (i >= 0) from = i;
+    }
+    const ok = player.current!.play(
+      sl,
+      from,
+      tempoRef.current,
+      (ids) => { if (ids) setSelected(ids[ids.length - 1]); },
+      () => setPlaying(false)
+    );
+    setPlaying(ok);
+  }, [selected]);
+
+  const togglePlay = useCallback(() => {
+    if (player.current!.playing) stopPlay();
+    else startPlay();
+  }, [startPlay, stopPlay]);
+
+  // parar al cambiar de página o cerrar
+  useEffect(() => { stopPlay(); }, [page, stopPlay]);
+  useEffect(() => () => player.current?.stop(), []);
+
   // ---------------------------------------------------------------- edición
   const updateNotes = useCallback(
     (fn: (n: NoteState[]) => NoteState[]) => {
@@ -296,6 +376,27 @@ export default function App() {
     },
     [selected, updateNotes]
   );
+
+  const setKind = useCallback(
+    (k: DurKind) => {
+      if (selected === null) return;
+      updateNotes((ns) => ns.map((n) => (n.id === selected ? { ...n, ...withKind(k) } : n)));
+    },
+    [selected, updateNotes]
+  );
+  const toggleDot = useCallback(() => {
+    if (selected === null) return;
+    updateNotes((ns) => ns.map((n) => (n.id === selected ? { ...n, dots: n.dots ? 0 : 1 } : n)));
+  }, [selected, updateNotes]);
+
+  const toggleTied = useCallback(() => {
+    if (selected === null) return;
+    updateNotes((ns) => ns.map((n) => (n.id === selected ? { ...n, tied: !n.tied } : n)));
+  }, [selected, updateNotes]);
+  const toggleTuplet = useCallback(() => {
+    if (selected === null) return;
+    updateNotes((ns) => ns.map((n) => (n.id === selected ? { ...n, tuplet: n.tuplet ? 0 : 3 } : n)));
+  }, [selected, updateNotes]);
 
   const shiftPitch = useCallback(
     (d: 1 | -1) => {
@@ -366,6 +467,7 @@ export default function App() {
         case "ArrowLeft": e.preventDefault(); moveSelection(-1); break;
         case "ArrowDown": e.preventDefault(); moveSelection(1, true); break;
         case "ArrowUp": e.preventDefault(); moveSelection(-1, true); break;
+        case " ": e.preventDefault(); togglePlay(); break;
         case "PageDown": setPage((p) => Math.min(numPages || 1, p + 1)); break;
         case "PageUp": setPage((p) => Math.max(1, p - 1)); break;
         case "+": case "=": setMode("add"); break;
@@ -377,7 +479,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setAcc, shiftPitch, deleteSelected, moveSelection, undo, redo, numPages]);
+  }, [setAcc, shiftPitch, togglePlay, deleteSelected, moveSelection, undo, redo, numPages]);
 
   const onSvgClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!data || !svgRef.current) return;
@@ -396,12 +498,78 @@ export default function App() {
     if (best < 0) { notify(L.clickInStaff, "info"); return; }
     const s = data.analysis.staves[best];
     const step = Math.round((s.bottom - p.y) / (s.sp / 2));
-    const n: NoteState = { id: nextId.current++, staff: best, x: p.x, y: s.bottom - (step * s.sp) / 2, step, acc: "auto" };
+    const n: NoteState = { id: nextId.current++, staff: best, x: p.x, y: s.bottom - (step * s.sp) / 2, step, acc: "auto", hollow: false, stem: true, beams: 0, dots: 0, tied: false, tuplet: 0 };
     updateNotes((ns) => [...ns, n]);
     setSelected(n.id);
   };
 
   // --------------------------------------------------------------- exportar
+  /** Notas y silencios de todas las páginas como instantes, más los compases y el compás (métrica) deducido. */
+  const gatherTimeline = async () => {
+    if (!doc) return null;
+    const all: Slot[] = [];
+    const xmlPages: XmlPage[] = [];
+    const bl: Record<number, number[]> = {};
+    let staffBase = 0;
+    for (let n = 1; n <= doc.numPages; n++) {
+      setBusyText(L.preparing(n, doc.numPages));
+      const pd = await ensurePage(doc, n);
+      const res = resolveNames(pd.notes, pd.analysis.staves, { key, clef, notation, showKey });
+      const sl = buildSlots(
+        res.map((r) => ({ id: r.note.id, midi: r.midi, staff: r.note.staff + staffBase, x: r.note.x, dur: durOf(r.note), tied: r.note.tied })),
+        pd.analysis.rests.map((r) => ({ staff: r.staff + staffBase, x: r.x, dur: restDur(r) })),
+        (si) => pd.analysis.staves[si - staffBase]?.sp ?? 16
+      );
+      all.push(...sl);
+      pd.analysis.staves.forEach((st, si) => { bl[si + staffBase] = st.barlines; });
+      xmlPages.push({ staves: pd.analysis.staves, notes: pd.notes, rests: pd.analysis.rests, resolved: res, setup: effectiveStaffSetup(pd.analysis.staves, key, clef) });
+      staffBase += pd.analysis.staves.length;
+    }
+    const m: MeterId = meter === "auto" ? guessMeter(barSums(all, bl)) : meter;
+    return { all, xmlPages, m };
+  };
+
+  const doMidi = async () => {
+    if (!doc || !path) return;
+    try {
+      const dst = await pickMidiPath(path.replace(/\.pdf$/i, "") + ".mid");
+      if (!dst) return;
+      setBusy(true);
+      const tl = await gatherTimeline();
+      if (!tl || !tl.all.some((s) => s.notes.length)) { notify(L.noNotes, "info"); return; }
+      const bytes = buildMidi(tl.all, tempo, MIDI_PROGRAM[instrument] ?? 0, tl.m);
+      let bin = "";
+      bytes.forEach((b) => (bin += String.fromCharCode(b)));
+      await writeFileB64(dst, btoa(bin));
+      notify(L.midiSaved(baseName(dst)), "ok");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doXml = async () => {
+    if (!doc || !path) return;
+    try {
+      const dst = await pickXmlPath(path.replace(/\.pdf$/i, "") + ".musicxml");
+      if (!dst) return;
+      setBusy(true);
+      const tl = await gatherTimeline();
+      if (!tl || !tl.all.some((s) => s.notes.length)) { notify(L.noNotes, "info"); return; }
+      const xml = buildMusicXml(tl.xmlPages, baseName(path).replace(/\.pdf$/i, ""), tempo, tl.m);
+      const bytes = new TextEncoder().encode(xml);
+      let bin = "";
+      bytes.forEach((b) => (bin += String.fromCharCode(b)));
+      await writeFileB64(dst, btoa(bin));
+      notify(L.xmlSaved(baseName(dst)), "ok");
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const doExport = async () => {
     if (!doc || !path) return;
     try {
@@ -473,6 +641,12 @@ export default function App() {
           <button className="btn" onClick={openPdf} disabled={busy} title={L.openTip}>
             <Icon name="folder" /> {L.open}
           </button>
+          <button className="btn" onClick={doMidi} disabled={!doc || busy} title={L.midiTip}>
+            <Icon name="download" /> MIDI
+          </button>
+          <button className="btn" onClick={doXml} disabled={!doc || busy} title={L.xmlTip}>
+            <Icon name="download" /> MusicXML
+          </button>
           <button className="btn primary" onClick={doExport} disabled={!doc || busy} title={L.exportTip}>
             <Icon name="download" /> {L.exportPdf}
           </button>
@@ -502,6 +676,25 @@ export default function App() {
             <input type="checkbox" checked={showKey} onChange={(e) => patchCfg({ showKey: e.target.checked })} />
             <span className="track" />
             <span>{L.showKey}</span>
+          </label>
+
+          <h3>{L.sound}</h3>
+          <label className="field">
+            <span>{L.instrument}{instLoading ? ` · ${L.instLoading}` : ""}</span>
+            <select value={instrument} onChange={(e) => patchCfg({ instrument: e.target.value as Instrument })}>
+              {INSTRUMENT_IDS.map((id) => <option key={id} value={id}>{L.instNames[id]}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>{L.meter}</span>
+            <select value={meter} onChange={(e) => patchCfg({ meter: e.target.value as MeterId | "auto" })}>
+              <option value="auto">{L.auto}</option>
+              {METERS.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>{L.tempo} <b>{tempo}</b></span>
+            <input type="range" min={40} max={240} step={5} value={tempo} onChange={(e) => patchCfg({ tempo: Number(e.target.value) })} />
           </label>
 
           <h3>{L.text}</h3>
@@ -593,6 +786,11 @@ export default function App() {
                         {l.acc ? ACC_SYMBOL[l.acc] : ""}
                       </text>
                     ))}
+                    {data.analysis.rests.map((r, i) => (
+                      <rect key={"r" + i} className="rest-mark" x={r.x - 0.6 * sp} y={r.y - 1.4 * sp} width={1.2 * sp} height={2.8 * sp} rx={3}>
+                        <title>{L.restNames[r.kind]}</title>
+                      </rect>
+                    ))}
                     {data.notes.map((n) => (
                       <circle
                         key={n.id}
@@ -619,6 +817,10 @@ export default function App() {
               </button>
               <button className={"ic" + (mode === "add" ? " on" : "")} onClick={() => setMode("add")} disabled={!data} title={L.add}>
                 <Icon name="plus" />
+              </button>
+              <span className="vsep" />
+              <button className={"ic" + (playing ? " on" : "")} onClick={togglePlay} disabled={!data || !slots.length || instLoading} title={playing ? L.stopTip : L.playTip}>
+                <Icon name={playing ? "stop" : "play"} />
               </button>
               <span className="vsep" />
               <button className="ic" onClick={undo} disabled={undoCount === 0} title={L.undo}><Icon name="undo" /></button>
@@ -652,6 +854,14 @@ export default function App() {
             </div>
           )}
 
+          {newVer && (
+            <div className="toast ok update">
+              <Icon name="globe" />
+              <span>{L.newVersion} v{newVer}</span>
+              <button className="btn" onClick={() => openUrl(RELEASES_URL).catch(() => window.open(RELEASES_URL, "_blank"))}>{L.download}</button>
+              <button className="ic small" onClick={() => setNewVer(null)} title={L.close}><Icon name="x" size={14} /></button>
+            </div>
+          )}
           {/* avisos */}
           {busy && doc && data && (
             <div className="toast info"><Icon name="spinner" /> {busyText}</div>
@@ -688,6 +898,20 @@ export default function App() {
                 <div className="seg">
                   <button onClick={() => shiftPitch(1)} title={L.pitchUp}>▲</button>
                   <button onClick={() => shiftPitch(-1)} title={L.pitchDown}>▼</button>
+                </div>
+              </div>
+
+              <div className="field">
+                <span>{L.duration}</span>
+                <div className="seg five">
+                  {DUR_KINDS.map((k) => (
+                    <button key={k} className={kindOf(selNote) === k ? "on" : ""} onClick={() => setKind(k)} title={L.durNames[k]}>{DUR_SYM[k]}</button>
+                  ))}
+                </div>
+                <div className="row">
+                  <button className={"btn" + (selNote.dots ? " primary" : "")} onClick={toggleDot} title={L.dotTip}>{L.dot} ·</button>
+                  <button className={"btn" + (selNote.tied ? " primary" : "")} onClick={toggleTied} title={L.tieTip}>{L.tie}</button>
+                  <button className={"btn" + (selNote.tuplet ? " primary" : "")} onClick={toggleTuplet} title={L.tupletTip}>{L.tuplet}</button>
                 </div>
               </div>
 

@@ -33,6 +33,29 @@ pub struct Note {
     pub step: i32,
     /// Alteración escrita justo delante de la nota: "b", "n" o "#" (None si no hay).
     pub acc: Option<String>,
+    /// cabeza hueca (blanca o redonda)
+    pub hollow: bool,
+    /// tiene plica
+    pub stem: bool,
+    /// barras o corchetes en la plica (0 = negra/blanca, 1 = corchea, 2 = semicorchea…)
+    pub beams: u8,
+    /// puntillos a la derecha de la cabeza
+    pub dots: u8,
+    /// ligada con la siguiente nota de la misma altura
+    pub tied: bool,
+    /// 3 si pertenece a un tresillo
+    pub tuplet: u8,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Rest {
+    pub staff: usize,
+    pub x: f32,
+    pub y: f32,
+    /// "whole", "half", "quarter", "eighth" o "sixteenth"
+    pub kind: String,
+    pub dots: u8,
+    pub tuplet: u8,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -41,6 +64,7 @@ pub struct Analysis {
     pub height: u32,
     pub staves: Vec<Staff>,
     pub notes: Vec<Note>,
+    pub rests: Vec<Rest>,
 }
 
 const DARK: u8 = 140;
@@ -52,7 +76,7 @@ pub fn analyze(gray: &[u8], w: usize, h: usize) -> Analysis {
     let bin_line: Vec<u8> = gray.iter().map(|&v| (v < DARK_LINE) as u8).collect();
     let mut staves = find_staves(&bin_line, w, h);
     if staves.is_empty() {
-        return Analysis { width: w as u32, height: h as u32, staves, notes: vec![] };
+        return Analysis { width: w as u32, height: h as u32, staves, notes: vec![], rests: vec![] };
     }
     let mut sps: Vec<f32> = staves.iter().map(|s| s.sp).collect();
     sps.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -66,6 +90,8 @@ pub fn analyze(gray: &[u8], w: usize, h: usize) -> Analysis {
     let mut head_boxes: Vec<(usize, usize, usize, usize)> = Vec::new();
     // (borde izquierdo de la cabeza, y central) de cada nota, en el mismo orden que `notes`
     let mut note_boxes: Vec<(usize, f32)> = Vec::new();
+    // origen de cada nota para medir su ritmo: (x0, x1, y central, hueca)
+    let mut rhy_src: Vec<(usize, usize, f32, bool)> = Vec::new();
 
     for c in comps {
         let cw = (c.x1 - c.x0 + 1) as f32;
@@ -112,15 +138,24 @@ pub fn analyze(gray: &[u8], w: usize, h: usize) -> Analysis {
                 first + (last - first) * k as f32 / (n_heads - 1) as f32
             };
             let step = ((s.bottom - yy) / (s.sp / 2.0)).round() as i32;
-            notes.push(Note { staff: si, x: cx, y: s.bottom - step as f32 * s.sp / 2.0, step, acc: None });
+            notes.push(Note { staff: si, x: cx, y: s.bottom - step as f32 * s.sp / 2.0, step, acc: None, hollow: false, stem: true, beams: 0, dots: 0, tied: false, tuplet: 0 });
             note_boxes.push((c.x0, yy));
+            rhy_src.push((c.x0, c.x1, cy, false));
         }
         head_boxes.push((c.x0, c.y0, c.x1, c.y1));
     }
 
     // Cabezas huecas (blancas y redondas)
     let clean0 = remove_staff_lines(&bin, w, h, &staves);
-    let header_ends: Vec<Option<usize>> = staves.iter().map(|st| header_end(&clean0, w, h, st)).collect();
+    let mut header_ends: Vec<Option<usize>> = staves.iter().map(|st| header_end(&clean0, w, h, st)).collect();
+    // si en un pentagrama no se pudo medir el encabezado, se usa el de otro con el mismo margen izquierdo
+    for i in 0..header_ends.len() {
+        if header_ends[i].is_none() {
+            header_ends[i] = (0..staves.len())
+                .filter(|&j| j != i && (staves[j].x0 - staves[i].x0).abs() < 3.0 && (staves[j].sp - staves[i].sp).abs() < 1.0)
+                .find_map(|j| header_ends[j]);
+        }
+    }
     for hh in detect_hollow(&bin, &bin_line, w, h, &staves, sp) {
         let Some(si) = staff_of(&staves, hh.cx, hh.cy) else { continue };
         let s = &staves[si];
@@ -137,8 +172,9 @@ pub fn analyze(gray: &[u8], w: usize, h: usize) -> Analysis {
                 continue; // clave, armadura o compás: sus óvalos no son notas
             }
         }
-        notes.push(Note { staff: si, x: hh.cx, y: ny, step, acc: None });
+        notes.push(Note { staff: si, x: hh.cx, y: ny, step, acc: None, hollow: true, stem: false, beams: 0, dots: 0, tied: false, tuplet: 0 });
         note_boxes.push((hh.x0, hh.cy));
+        rhy_src.push((hh.x0, hh.x1, hh.cy, true));
         head_boxes.push((hh.x0, hh.y0, hh.x1, hh.y1));
     }
 
@@ -181,13 +217,30 @@ pub fn analyze(gray: &[u8], w: usize, h: usize) -> Analysis {
         }
     }
 
+    // Ritmo: plica, barras/corchetes y puntillos de cada cabeza
+    let mut cache: std::collections::HashMap<(usize, usize, i32), (bool, u8)> = std::collections::HashMap::new();
+    for i in 0..notes.len() {
+        let (x0, x1, cy, hollow) = rhy_src[i];
+        let sp_i = staves[notes[i].staff].sp;
+        let (stem, beams) = *cache
+            .entry((x0, x1, cy as i32))
+            .or_insert_with(|| stem_and_beams(&bin_line, &bin, w, h, x0, x1, cy, sp_i));
+        notes[i].stem = stem;
+        notes[i].beams = if hollow { 0 } else { beams };
+        notes[i].dots = count_dots(&clean0, w, h, x1, note_boxes[i].1, sp_i);
+    }
+
     notes.sort_by(|a, b| {
         a.staff
             .cmp(&b.staff)
             .then(a.x.partial_cmp(&b.x).unwrap())
             .then(b.step.cmp(&a.step))
     });
-    Analysis { width: w as u32, height: h as u32, staves, notes }
+    let comps0 = components(&clean0, w, h);
+    let mut rests = detect_rests(&comps0, &clean0, w, h, &staves, &head_boxes, &header_ends, &notes);
+    detect_ties(&comps0, &clean0, w, &staves, &mut notes);
+    detect_tuplets(&comps0, &clean0, w, &staves, &mut notes, &mut rests);
+    Analysis { width: w as u32, height: h as u32, staves, notes, rests }
 }
 
 // ---------------------------------------------------------------- pentagramas
@@ -742,7 +795,7 @@ fn detect_hollow(bin: &[u8], stem_bin: &[u8], w: usize, h: usize, staves: &[Staf
                         }
                     }
                 }
-                if ring == 0 || (dark as f32) / (ring as f32) < 0.75 {
+                if ring == 0 || (dark as f32) / (ring as f32) < 0.70 {
                     continue;
                 }
                 let cx = sx / area as f32;
@@ -1044,4 +1097,468 @@ fn header_end(clean: &[u8], w: usize, h: usize, st: &Staff) -> Option<usize> {
         break;
     }
     Some(end)
+}
+
+
+// ---------------------------------------------------------------- ritmo
+
+/// Busca la plica de una cabeza (columnas de sus bordes) y cuenta las barras o corchetes de su extremo.
+/// Devuelve (tiene plica, nº de barras).
+fn stem_and_beams(bin: &[u8], dark: &[u8], w: usize, h: usize, x0: usize, x1: usize, cy: f32, sp: f32) -> (bool, u8) {
+    let need = (2.4 * sp) as usize;
+    let reach = (8.0 * sp) as isize;
+    let ya = (cy as isize - reach).max(0) as usize;
+    let yb = ((cy as isize + reach) as usize).min(h - 1);
+    // (columna, inicio, fin) de la racha vertical más larga que atraviesa la cabeza
+    let mut best: Option<(usize, usize, usize)> = None;
+    let cols: Vec<usize> = (0..3).map(|k| x0 + k).chain((0..4).map(|k| x1.saturating_sub(k))).chain([x1 + 1, x1 + 2]).collect();
+    for x in cols {
+        if x >= w {
+            continue;
+        }
+        let (mut s, mut e, mut gap, mut active) = (0usize, 0usize, 0usize, false);
+        for y in ya..=yb + 1 {
+            let dark = y <= yb && bin[y * w + x] == 1;
+            if dark {
+                if !active {
+                    s = y;
+                    active = true;
+                }
+                e = y;
+                gap = 0;
+            } else if active {
+                gap += 1;
+                if gap > 2 || y > yb {
+                    let run = e + 1 - s;
+                    if run >= need && (s as f32) <= cy + 0.75 * sp && (e as f32) >= cy - 0.75 * sp {
+                        if best.map_or(true, |(_, bs, be)| run > be + 1 - bs) {
+                            best = Some((x, s, e));
+                        }
+                    }
+                    active = false;
+                    gap = 0;
+                }
+            }
+        }
+    }
+    let Some((col, s, e)) = best else { return (false, 0) };
+    let up = (cy - s as f32) > (e as f32 - cy);
+    let win = (1.6 * sp) as usize;
+    let (wa, wb) = if up { (s, (s + win).min(h - 1)) } else { (e.saturating_sub(win), e) };
+    let mut most = 0u8;
+    for side in [-1isize, 1] {
+        let mut per: Vec<u8> = Vec::new();
+        for dxf in [0.4f32, 0.55, 0.7] {
+            let x = col as isize + side * (dxf * sp).round() as isize;
+            if x < 0 || x as usize >= w {
+                continue;
+            }
+            let x = x as usize;
+            let mut runs = 0u8;
+            let mut len = 0usize;
+            let mut gap = 0usize;
+            let min_t = (0.3 * sp).round() as usize;
+            for y in wa..=wb + 1 {
+                let ink = y <= wb && dark[y * w + x] == 1;
+                if ink {
+                    len += 1 + gap;
+                    gap = 0;
+                } else {
+                    gap += 1;
+                    if gap > 1 || y > wb {
+                        if len >= min_t.max(2) {
+                            // dos barras casi pegadas se funden en una sola racha gruesa
+                            runs += if len + 1 >= wb - wa { 0 } else if len as f32 >= 1.45 * sp { 3 } else if len as f32 >= 0.9 * sp { 2 } else { 1 };
+                        }
+                        len = 0;
+                        gap = 0;
+                    }
+                }
+            }
+            per.push(runs.min(3));
+        }
+        per.sort();
+        if !per.is_empty() {
+            most = most.max(per[per.len() / 2]);
+        }
+    }
+    (true, most)
+}
+
+/// Cuenta un puntillo de aumento a la derecha de la cabeza (blob pequeño y aislado).
+fn count_dots(clean: &[u8], w: usize, h: usize, x1: usize, cy: f32, sp: f32) -> u8 {
+    let xa = x1 + (0.35 * sp) as usize;
+    let xb = (x1 as f32 + 1.45 * sp) as usize;
+    let ya = (cy - 0.8 * sp).max(0.0) as usize;
+    let yb = ((cy + 0.45 * sp) as usize).min(h - 1);
+    for y in ya..=yb {
+        for x in xa..=xb.min(w - 1) {
+            if clean[y * w + x] != 1 {
+                continue;
+            }
+            // componente conexa limitada alrededor del píxel
+            let lim = (1.6 * sp) as isize;
+            let (mut minx, mut maxx, mut miny, mut maxy) = (x, x, y, y);
+            let mut stack = vec![(x, y)];
+            let mut seen = std::collections::HashSet::new();
+            seen.insert((x, y));
+            let mut count = 0usize;
+            let mut spill = false;
+            while let Some((px, py)) = stack.pop() {
+                count += 1;
+                minx = minx.min(px);
+                maxx = maxx.max(px);
+                miny = miny.min(py);
+                maxy = maxy.max(py);
+                if (maxx - minx) as isize > lim || (maxy - miny) as isize > lim {
+                    spill = true;
+                    break;
+                }
+                for (dx, dy) in [(-1isize, 0isize), (1, 0), (0, -1), (0, 1)] {
+                    let nx = px as isize + dx;
+                    let ny = py as isize + dy;
+                    if nx < 0 || ny < 0 || nx as usize >= w || ny as usize >= h {
+                        continue;
+                    }
+                    let k = (nx as usize, ny as usize);
+                    if clean[k.1 * w + k.0] == 1 && seen.insert(k) {
+                        stack.push(k);
+                    }
+                }
+            }
+            if spill {
+                continue;
+            }
+            let bw = (maxx - minx + 1) as f32;
+            let bh = (maxy - miny + 1) as f32;
+            let fill = count as f32 / (bw * bh);
+            if bw >= 0.18 * sp && bw <= 0.6 * sp && bh >= 0.18 * sp && bh <= 0.6 * sp && fill >= 0.55 {
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+
+// ---------------------------------------------------------------- silencios
+
+fn detect_rests(
+    comps: &[Comp],
+    clean: &[u8],
+    w: usize,
+    h: usize,
+    staves: &[Staff],
+    head_boxes: &[(usize, usize, usize, usize)],
+    header_ends: &[Option<usize>],
+    notes: &[Note],
+) -> Vec<Rest> {
+    let mut out = Vec::new();
+    for c in comps.iter() {
+        let cw = (c.x1 - c.x0 + 1) as f32;
+        let ch = (c.y1 - c.y0 + 1) as f32;
+        let cx = (c.x0 + c.x1) as f32 / 2.0;
+        let cy = (c.y0 + c.y1) as f32 / 2.0;
+        // pentagrama que lo contiene
+        let Some(si) = staves.iter().position(|s| {
+            c.x0 as f32 >= s.x0 && c.x1 as f32 <= s.x1 && cy >= s.top - 0.3 * s.sp && cy <= s.bottom + 0.3 * s.sp
+        }) else {
+            continue;
+        };
+        let s = &staves[si];
+        let sp = s.sp;
+        if let Some(hx) = header_ends[si] {
+            if (c.x0 as f32) <= hx as f32 + 0.3 * sp {
+                continue;
+            }
+        } else if (c.x0 as f32) < s.x0 + 4.0 * sp {
+            continue;
+        }
+        let (wsp, hsp) = (cw / sp, ch / sp);
+        let fill = c.area as f32 / (cw * ch);
+        // se descartan las cabezas, plicas, barras y alteraciones pegadas a una cabeza
+        let near_head = head_boxes.iter().any(|&(x0, y0, x1, y1)| {
+            (c.x1 + (0.6 * sp) as usize) >= x0 && c.x0 <= x1 + (0.3 * sp) as usize && c.y1 + (0.5 * sp) as usize >= y0 && c.y0 <= y1 + (0.5 * sp) as usize
+        });
+        if near_head {
+            continue;
+        }
+        let kind = if (0.8..=1.8).contains(&wsp) && (0.25..=0.72).contains(&hsp) && fill >= 0.7 {
+            // redonda: cuelga de la 2.ª línea; blanca: se apoya en la 3.ª
+            let rel = (cy - s.top) / sp;
+            if (0.9..=1.55).contains(&rel) {
+                "whole"
+            } else if (1.55..=2.15).contains(&rel) {
+                "half"
+            } else {
+                continue;
+            }
+        } else if (0.6..=1.9).contains(&wsp) && (2.2..=3.6).contains(&hsp) && fill < 0.6 {
+            if wsp >= 1.25 { "sixteenth" } else { "quarter" }
+        } else if (0.6..=1.5).contains(&wsp) && (1.3..2.2).contains(&hsp) && fill < 0.65 {
+            "eighth"
+        } else {
+            continue;
+        };
+        // las letras de un texto tienen otras letras pegadas; un silencio está aislado
+        let gap = (0.4 * sp) as usize;
+        let ink_in = |xa: usize, xb: usize| (xa..=xb.min(w - 1)).any(|x| (c.y0..=c.y1).any(|y| clean[y * w + x] == 1));
+        if (c.x0 > gap && ink_in(c.x0 - gap, c.x0 - 1)) || ink_in(c.x1 + 1, c.x1 + gap) {
+            continue;
+        }
+        // las alteraciones (♭ ♯ ♮) tienen un trazo vertical largo; el zigzag de un silencio no
+        if matches!(kind, "quarter" | "sixteenth" | "eighth") {
+            let mut longest = 0usize;
+            for x in c.x0..=c.x1 {
+                let mut run = 0usize;
+                for y in c.y0..=c.y1 {
+                    if clean[y * w + x] == 1 {
+                        run += 1;
+                        longest = longest.max(run);
+                    } else {
+                        run = 0;
+                    }
+                }
+            }
+            if longest as f32 >= 1.7 * sp {
+                continue;
+            }
+        }
+        // no es un silencio si hay una nota con la cabeza dentro de su caja
+        if notes.iter().any(|n| n.staff == si && n.x >= c.x0 as f32 - 0.3 * sp && n.x <= c.x1 as f32 + 0.3 * sp && n.y >= c.y0 as f32 - 0.3 * sp && n.y <= c.y1 as f32 + 0.3 * sp) {
+            continue;
+        }
+        let dots = count_dots(clean, w, h, c.x1, cy - 0.2 * sp, sp);
+        out.push(Rest { staff: si, x: cx, y: cy, kind: kind.to_string(), dots, tuplet: 0 });
+    }
+    out.sort_by(|a, b| a.staff.cmp(&b.staff).then(a.x.partial_cmp(&b.x).unwrap()));
+    out
+}
+
+
+// ---------------------------------------------------------------- ligaduras
+
+/// Ligaduras de unión: un arco entre dos notas de la misma altura. Marca la primera como `tied`.
+fn detect_ties(comps: &[Comp], clean: &[u8], w: usize, staves: &[Staff], notes: &mut [Note]) {
+    for c in comps {
+        let cw = (c.x1 - c.x0 + 1) as f32;
+        let ch = (c.y1 - c.y0 + 1) as f32;
+        let cy = (c.y0 + c.y1) as f32 / 2.0;
+        let Some(si) = staves.iter().position(|s| (c.x0 as f32) >= s.x0 - 1.0 && (c.x1 as f32) <= s.x1 + 1.0 && cy >= s.top - 3.0 * s.sp && cy <= s.bottom + 3.0 * s.sp) else {
+            continue;
+        };
+        let sp = staves[si].sp;
+        if cw < 1.5 * sp || cw > 14.0 * sp || ch < 0.2 * sp || ch > 1.5 * sp {
+            continue;
+        }
+        if (c.area as f32) / (cw * ch) > 0.6 {
+            continue;
+        }
+        // curvatura: altura media de la tinta en los extremos frente a la del centro
+        let col_y = |x0: usize, x1: usize| -> Option<f32> {
+            let (mut sum, mut n) = (0.0f32, 0u32);
+            for x in x0..=x1.min(w - 1) {
+                for y in c.y0..=c.y1 {
+                    if clean[y * w + x] == 1 {
+                        sum += y as f32;
+                        n += 1;
+                    }
+                }
+            }
+            if n == 0 { None } else { Some(sum / n as f32) }
+        };
+        let k = ((0.12 * cw) as usize).max(2);
+        let (Some(l), Some(r), Some(m)) = (col_y(c.x0, c.x0 + k), col_y(c.x1.saturating_sub(k), c.x1), col_y((c.x0 + c.x1) / 2 - k / 2, (c.x0 + c.x1) / 2 + k / 2)) else {
+            continue;
+        };
+        if (m - (l + r) / 2.0).abs() < 0.15 * sp {
+            continue; // recto: una barra, no una ligadura
+        }
+        // notas de los extremos
+        let a = notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.staff == si && (n.x - c.x0 as f32).abs() < 2.2 * sp && n.x < c.x0 as f32 + 0.6 * sp && (n.y - cy).abs() < 2.2 * sp)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        let b = notes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.staff == si && (n.x - c.x1 as f32).abs() < 1.6 * sp && n.x > c.x1 as f32 - 0.6 * sp && (n.y - cy).abs() < 2.2 * sp)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        for &i in &a {
+            if b.iter().any(|&j| notes[j].step == notes[i].step && notes[j].x > notes[i].x + sp) {
+                notes[i].tied = true;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- tresillos
+
+/// ¿Parece un «3»? Se compara una rejilla de 7×5 celdas con el patrón de esa cifra.
+fn looks_like_three(clean: &[u8], w: usize, c: &Comp) -> bool {
+    let cw = c.x1 - c.x0 + 1;
+    let ch = c.y1 - c.y0 + 1;
+    let mut g = [[false; 5]; 7];
+    for r in 0..7 {
+        for q in 0..5 {
+            let (ya, yb) = (c.y0 + r * ch / 7, c.y0 + ((r + 1) * ch / 7).max(r * ch / 7 + 1) - 1);
+            let (xa, xb) = (c.x0 + q * cw / 5, c.x0 + ((q + 1) * cw / 5).max(q * cw / 5 + 1) - 1);
+            let mut ink = 0;
+            let mut tot = 0;
+            for y in ya..=yb.min(c.y1) {
+                for x in xa..=xb.min(c.x1) {
+                    tot += 1;
+                    if clean[y * w + x] == 1 {
+                        ink += 1;
+                    }
+                }
+            }
+            g[r][q] = tot > 0 && ink * 4 >= tot; // al menos un 25 % de tinta
+        }
+    }
+    let row_any = |r: usize, a: usize, b: usize| (a..=b).any(|q| g[r][q]);
+    let right_up = row_any(1, 3, 4) || row_any(2, 3, 4);
+    let right_down = row_any(4, 3, 4) || row_any(5, 3, 4);
+    let left_mid_empty = !g[3][0] && !g[2][0];
+    let top = row_any(0, 0, 4);
+    let bottom = row_any(6, 0, 4);
+    let mid = row_any(3, 1, 3);
+    top && bottom && mid && right_up && right_down && left_mid_empty
+}
+
+/// Cifras «3» sobre o bajo un grupo: las tres notas (o silencios) más cercanas a su centro pasan a ser un tresillo.
+fn detect_tuplets(comps_all: &[Comp], clean: &[u8], w: usize, staves: &[Staff], notes: &mut [Note], rests: &mut [Rest]) {
+    // las cifras pueden salir partidas en trozos: se unen los trozos pequeños muy próximos
+    let sp0 = staves.first().map_or(12.0, |s| s.sp);
+    let small: Vec<&Comp> = comps_all.iter().filter(|c| ((c.x1 - c.x0 + 1) as f32) <= 1.6 * sp0 && ((c.y1 - c.y0 + 1) as f32) <= 1.6 * sp0).collect();
+    let pad = (0.3 * sp0) as usize;
+    let mut parent: Vec<usize> = (0..small.len()).collect();
+    fn find(p: &mut Vec<usize>, i: usize) -> usize {
+        let mut r = i;
+        while p[r] != r {
+            r = p[r];
+        }
+        let mut j = i;
+        while p[j] != r {
+            let n = p[j];
+            p[j] = r;
+            j = n;
+        }
+        r
+    }
+    let mut idx: Vec<usize> = (0..small.len()).collect();
+    idx.sort_by_key(|&i| small[i].x0);
+    for (a, &i) in idx.iter().enumerate() {
+        for &j in idx[a + 1..].iter() {
+            if small[j].x0 > small[i].x1 + pad {
+                break;
+            }
+            let (ci, cj) = (small[i], small[j]);
+            if cj.y0 <= ci.y1 + pad && ci.y0 <= cj.y1 + pad {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                }
+            }
+        }
+    }
+    let mut merged: std::collections::HashMap<usize, Comp> = std::collections::HashMap::new();
+    for i in 0..small.len() {
+        let r = find(&mut parent, i);
+        let c = small[i];
+        merged
+            .entry(r)
+            .and_modify(|m| {
+                m.x0 = m.x0.min(c.x0);
+                m.y0 = m.y0.min(c.y0);
+                m.x1 = m.x1.max(c.x1);
+                m.y1 = m.y1.max(c.y1);
+                m.area += c.area;
+            })
+            .or_insert(Comp { x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1, area: c.area, sx: 0.0, sy: 0.0, wide_scan: false });
+    }
+    let cands: Vec<Comp> = merged.into_values().collect();
+    let comps: &[Comp] = comps_all;
+    for c in cands.iter() {
+        let cw = (c.x1 - c.x0 + 1) as f32;
+        let ch = (c.y1 - c.y0 + 1) as f32;
+        let cx = (c.x0 + c.x1) as f32 / 2.0;
+        let cy = (c.y0 + c.y1) as f32 / 2.0;
+        let Some(si) = (0..staves.len())
+            .filter(|&i| {
+                let s = &staves[i];
+                cx >= s.x0 && cx <= s.x1 && (cy > s.top - 6.0 * s.sp && cy < s.bottom + 6.0 * s.sp)
+            })
+            .min_by(|&a, &b| {
+                let da = (cy - staves[a].top).abs().min((cy - staves[a].bottom).abs());
+                let db = (cy - staves[b].top).abs().min((cy - staves[b].bottom).abs());
+                da.partial_cmp(&db).unwrap()
+            })
+        else {
+            continue;
+        };
+        let sp = staves[si].sp;
+        if !(0.7..=1.5).contains(&(ch / sp)) || !(0.4..=1.2).contains(&(cw / sp)) || cw / ch < 0.6 {
+            continue;
+        }
+        // un punto justo a la derecha indica una numeración («1.», «2.») y no un tresillo
+        let dot_right = comps.iter().any(|o| o.x0 > c.x1 && (o.x0 as f32) < c.x1 as f32 + 0.5 * sp && ((o.x1 - o.x0 + 1) as f32) < 0.4 * sp && ((o.y1 - o.y0 + 1) as f32) < 0.4 * sp && o.y0 as f32 > cy);
+        if dot_right {
+            continue;
+        }
+        // texto: otra letra pegada (cifras con corchete tienen solo un trazo fino al lado)
+        let neighbour_text = comps.iter().any(|o| {
+            let oh = (o.y1 - o.y0 + 1) as f32;
+            let ow = (o.x1 - o.x0 + 1) as f32;
+            !(o.x0 >= c.x0 && o.x1 <= c.x1 && o.y0 >= c.y0 && o.y1 <= c.y1)
+                && oh >= 0.5 * sp
+                && ow <= 1.6 * sp
+                && o.y1 as f32 >= c.y0 as f32 - 0.3 * sp
+                && o.y0 as f32 <= c.y1 as f32 + 0.3 * sp
+                && ((o.x1 as f32 >= c.x0 as f32 - 0.5 * sp && o.x1 < c.x0) || (o.x0 as f32 <= c.x1 as f32 + 0.5 * sp && o.x0 > c.x1))
+        });
+        if neighbour_text {
+            continue;
+        }
+        if !looks_like_three(clean, w, c) {
+            continue;
+        }
+        // elementos del pentagrama ordenados por x (acordes agrupados)
+        let mut items: Vec<(f32, Vec<usize>, Vec<usize>)> = Vec::new();
+        let mut order: Vec<(f32, bool, usize)> = notes.iter().enumerate().filter(|(_, n)| n.staff == si).map(|(i, n)| (n.x, true, i)).collect();
+        order.extend(rests.iter().enumerate().filter(|(_, r)| r.staff == si).map(|(i, r)| (r.x, false, i)));
+        order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        for (x, is_note, i) in order {
+            match items.last_mut() {
+                Some(last) if (x - last.0).abs() < 0.5 * sp => {
+                    if is_note { last.1.push(i) } else { last.2.push(i) }
+                }
+                _ => items.push((x, if is_note { vec![i] } else { vec![] }, if is_note { vec![] } else { vec![i] })),
+            }
+        }
+        if items.len() < 3 {
+            continue;
+        }
+        let mut best = (f32::MAX, 0usize);
+        for k in 0..=items.len() - 3 {
+            let d = (cx - (items[k].0 + items[k + 2].0) / 2.0).abs();
+            if d < best.0 {
+                best = (d, k);
+            }
+        }
+        if best.0 > 1.0 * sp {
+            continue;
+        }
+        for it in &items[best.1..best.1 + 3] {
+            for &i in &it.1 {
+                notes[i].tuplet = 3;
+            }
+            for &i in &it.2 {
+                rests[i].tuplet = 3;
+            }
+        }
+    }
 }

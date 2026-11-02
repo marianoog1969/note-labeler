@@ -18,6 +18,24 @@ export interface RawNote {
   step: number;
   /** alteración detectada delante de la nota */
   acc?: "b" | "n" | "#" | null;
+  /** ritmo detectado */
+  hollow: boolean;
+  stem: boolean;
+  beams: number;
+  dots: number;
+  /** ligada con la siguiente nota de la misma altura */
+  tied: boolean;
+  /** 3 si es parte de un tresillo */
+  tuplet: number;
+}
+
+export interface Rest {
+  staff: number;
+  x: number;
+  y: number;
+  kind: "whole" | "half" | "quarter" | "eighth" | "sixteenth";
+  dots: number;
+  tuplet: number;
 }
 
 export interface Analysis {
@@ -25,6 +43,7 @@ export interface Analysis {
   height: number;
   staves: Staff[];
   notes: RawNote[];
+  rests: Rest[];
 }
 
 /** auto = lo que dicen la armadura y el compás; b/n/# = alteración puesta a mano */

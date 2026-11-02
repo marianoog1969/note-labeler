@@ -134,3 +134,11 @@ kbd { display: inline-block; min-width: 24px; padding: 2px 7px; border: 1px soli
 .donate-qr { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 16px; color: #6b7588; font-size: 12px; }
 .donate-qr img { width: 180px; height: 180px; object-fit: contain; border: 1px solid var(--line); border-radius: 10px; padding: 6px; background: #fff; }
 .brand-name .ver { font-size: 11px; font-weight: 500; color: #8a94a6; margin-left: 4px; }
+
+.toast.update { top: 12px; bottom: auto; }
+.toast.update .btn { padding: 4px 10px; color: #111; }
+
+.seg.five{display:grid;grid-template-columns:repeat(5,1fr)}
+.seg.five button{font-size:18px;padding:4px 0}
+
+.rest-mark{fill:rgba(34,160,80,.10);stroke:rgba(34,160,80,.8);stroke-width:1.5;pointer-events:none}

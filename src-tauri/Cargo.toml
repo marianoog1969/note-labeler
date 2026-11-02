@@ -1,6 +1,6 @@
 [package]
 name = "note-labeler"
-version = "0.7.0"
+version = "1.2.1"
 description = "Escribe el nombre de las notas bajo cada nota de una partitura en PDF"
 edition = "2021"
 
